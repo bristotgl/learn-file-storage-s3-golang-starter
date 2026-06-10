@@ -1,10 +1,13 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
@@ -39,16 +42,20 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	file, header, err := r.FormFile("thumbnail")
+	multipartFile, header, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Thumbnail not present in request ", err)
 		return
 	}
 
-	mediaType := header.Header.Get("Content-Type")
-	thumbnailBytes, err := io.ReadAll(file)
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error parsing thumbnail ", err)
+		respondWithError(w, http.StatusInternalServerError, "Error parsing media type", err)
+		return
+	}
+
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusInternalServerError, "Thumbnail must be either a jpeg or a png", err)
 		return
 	}
 
@@ -63,8 +70,22 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	encodedThumbnail := base64.StdEncoding.EncodeToString(thumbnailBytes)
-	thumbnailUrl := fmt.Sprintf("data:%s;base64,%s", mediaType, encodedThumbnail)
+	extension := strings.Split(mediaType, "/")[1]
+	filename := fmt.Sprintf("%s.%s", video.ID, extension)
+	thumbnailPath := filepath.Join(cfg.assetsRoot, filename)
+	thumbnailFile, err := os.Create(thumbnailPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error creating file for storing thumbnail", err)
+		return
+	}
+
+	_, err = io.Copy(thumbnailFile, multipartFile)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error copying thumbnail bytes to new file", err)
+		return
+	}
+
+	thumbnailUrl := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, filename)
 	video.ThumbnailURL = &thumbnailUrl
 
 	if err := cfg.db.UpdateVideo(video); err != nil {
