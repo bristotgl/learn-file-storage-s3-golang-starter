@@ -6,9 +6,9 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
-	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -86,17 +86,11 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	url := cfg.getAssetURL(assetPath)
 	video.ThumbnailURL = &url
+	video.UpdatedAt = time.Now()
 	if err := cfg.db.UpdateVideo(video); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error updating video with thumbnail", err)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, database.Video{
-		ID:                video.ID,
-		CreatedAt:         video.CreatedAt,
-		UpdatedAt:         video.UpdatedAt,
-		ThumbnailURL:      video.ThumbnailURL,
-		VideoURL:          video.VideoURL,
-		CreateVideoParams: video.CreateVideoParams,
-	})
+	respondWithJSON(w, http.StatusOK, video)
 }
