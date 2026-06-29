@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -42,4 +46,59 @@ func (cfg *apiConfig) getAssetURL(assetPath string) string {
 
 func (cfg *apiConfig) getBucketObjectURL(key string) string {
 	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
+}
+
+func makeObjectKey(filename string, prefixes ...string) string {
+	prefixedString := filepath.Join(prefixes...)
+	return filepath.Join(prefixedString, filename)
+}
+
+func getAspectRatioName(formattedRatio string) string {
+	if formattedRatio == "9:16" {
+		return "portrait"
+	}
+
+	if formattedRatio == "16:9" {
+		return "landscape"
+	}
+
+	return "other"
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	type ffpegResult struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	buffer := new(bytes.Buffer)
+	cmd.Stdout = buffer
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	cmdResult := ffpegResult{}
+	if err := json.Unmarshal(buffer.Bytes(), &cmdResult); err != nil {
+		return "", err
+	}
+
+	return formatAspectRatio(cmdResult.Streams[0].Width, cmdResult.Streams[0].Height), nil
+}
+
+func formatAspectRatio(width, height int) string {
+	const tolerance = 0.05
+	ratio := float64(width) / float64(height)
+
+	if math.Abs(ratio-9.0/16.0) < tolerance {
+		return "9:16"
+	}
+
+	if math.Abs(ratio-16.0/9.0) < tolerance {
+		return "16:9"
+	}
+
+	return "other"
 }
