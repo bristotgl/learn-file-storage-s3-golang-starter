@@ -48,11 +48,6 @@ func (cfg *apiConfig) getBucketObjectURL(key string) string {
 	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
 }
 
-func makeObjectKey(filename string, prefixes ...string) string {
-	prefixedString := filepath.Join(prefixes...)
-	return filepath.Join(prefixedString, filename)
-}
-
 func getAspectRatioName(formattedRatio string) string {
 	if formattedRatio == "9:16" {
 		return "portrait"

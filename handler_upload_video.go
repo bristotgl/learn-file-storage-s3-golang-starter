@@ -1,10 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -64,19 +68,13 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tempVideoFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	tempVideoFile, err := createTempVideoFile(multipartFile)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error creating temporary file", err)
+		respondWithError(w, http.StatusInternalServerError, "Error processing video", err)
 		return
 	}
 	defer os.Remove(tempVideoFile.Name())
 	defer tempVideoFile.Close()
-
-	_, err = io.Copy(tempVideoFile, multipartFile)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error copying video bytes to new file", err)
-		return
-	}
 
 	aspectRatio, err := getVideoAspectRatio(tempVideoFile.Name())
 	if err != nil {
@@ -84,10 +82,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tempVideoFile.Seek(0, io.SeekStart)
-
-	videoPath := getAssetPath(mediaType)
-	objectKey := makeObjectKey(videoPath, getAspectRatioName(aspectRatio))
+	objectKey := filepath.Join(getAspectRatioName(aspectRatio), getAssetPath(mediaType))
 	putObjectParams := s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &objectKey,
@@ -112,4 +107,44 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func createTempVideoFile(multipartFile multipart.File) (*os.File, error) {
+	tempVideoFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	if err != nil {
+		return nil, fmt.Errorf("Error creating temporary file: %w", err)
+	}
+	defer os.Remove(tempVideoFile.Name())
+	defer tempVideoFile.Close()
+
+	_, err = io.Copy(tempVideoFile, multipartFile)
+	if err != nil {
+		return nil, fmt.Errorf("Error copying video bytes to new file: %w", err)
+	}
+	tempVideoFile.Seek(0, io.SeekStart)
+
+	processedVideoPath, err := processVideoForFastStart(tempVideoFile.Name())
+	if err != nil {
+		return nil, fmt.Errorf("Error pre-processing video for fast start: %w", err)
+	}
+
+	processedVideoFile, err := os.Open(processedVideoPath)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating temporary file for processed video: %w", err)
+	}
+
+	return processedVideoFile, nil
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	outputFilePath := filePath + ".processing"
+
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy",
+		"-movflags", "faststart", "-f", "mp4", outputFilePath)
+
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	return outputFilePath, nil
 }
