@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"mime"
@@ -9,10 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -100,13 +103,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	video.UpdatedAt = time.Now()
 	video.VideoURL = &videoURL
 
-	err = cfg.db.UpdateVideo(video)
+	signedVideo, err := cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Couldn't convert video to signed video", err)
+		return
+	}
+
+	err = cfg.db.UpdateVideo(signedVideo)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error updating video", err)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, video)
+	respondWithJSON(w, http.StatusOK, signedVideo)
 }
 
 func createTempVideoFile(multipartFile multipart.File) (*os.File, error) {
@@ -147,4 +156,39 @@ func processVideoForFastStart(filePath string) (string, error) {
 	}
 
 	return outputFilePath, nil
+}
+
+func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
+	presignedClient := s3.NewPresignClient(s3Client)
+	params := s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	}
+
+	presignedRequest, err := presignedClient.PresignGetObject(context.Background(), &params, s3.WithPresignExpires(expireTime))
+	if err != nil {
+		return "", err
+	}
+
+	return presignedRequest.URL, nil
+}
+
+func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+	if video.VideoURL == nil {
+		return video, nil
+	}
+
+	parts := strings.Split(*video.VideoURL, ",")
+	if len(parts) < 2 {
+		return video, nil
+	}
+
+	bucket, key := parts[0], parts[1]
+	presignedUrl, err := generatePresignedURL(cfg.s3Client, bucket, key, time.Minute*5)
+	if err != nil {
+		return database.Video{}, nil
+	}
+
+	video.VideoURL = &presignedUrl
+	return video, nil
 }
